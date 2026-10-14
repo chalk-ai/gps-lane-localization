@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPS to Lane</title>
+<style>
+  /* Chalk marketing palette: green-1 ground, chartreuse primary, mint accents. */
+  :root { --bg:#224A41; --panel:#1C3B34; --line:#32645B; --ink:#EFF5F3; --muted:#B9CFC7;
+          --accent:#BBD96D; --mint:#70CD96; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; padding:28px 16px; }
+  html.embed body { padding:20px; }
+  html.embed header { display:none; }
+  .wrap { max-width:1180px; margin:0 auto; display:flex; flex-direction:column; gap:14px; }
+  .mono { font-family:ui-monospace,"SFMono-Regular",Menlo,monospace; text-transform:uppercase;
+          letter-spacing:.06em; font-size:11.5px; }
+  h1 { font-size:22px; font-weight:500; margin:0 0 4px; letter-spacing:-0.3px; }
+  header p { color:var(--muted); margin:0; }
+  .bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  button, select { font:12px/14px ui-monospace,"SFMono-Regular",Menlo,monospace; text-transform:uppercase;
+           letter-spacing:.06em; border:1px solid var(--line); border-radius:20px; padding:9px 14px;
+           cursor:pointer; background:transparent; color:var(--muted); white-space:nowrap; }
+  button:hover { color:var(--ink); border-color:var(--muted); }
+  button.on { background:var(--accent); border-color:var(--accent); color:var(--bg); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:var(--bg); }
+  button.primary:hover { background:transparent; color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  .seg { display:inline-flex; gap:4px; }
+  .spacer { flex:1; }
+  #status { color:var(--muted); }
+  .grid { display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:14px; }
+  @media (max-width:900px) { .grid { grid-template-columns:1fr; } }
+  #mapwrap { position:relative; height:600px; background:#173029; border:1px solid var(--line);
+             border-radius:4px; overflow:hidden; touch-action:none; }
+  @media (max-width:900px) { #mapwrap { height:440px; } }
+  #map { display:block; width:100%; height:100%; cursor:grab; }
+  #maphint { position:absolute; left:10px; bottom:8px; color:var(--muted); pointer-events:none; }
+  #zoom { position:absolute; right:10px; top:10px; display:flex; flex-direction:column; gap:6px; }
+  #zoom button { padding:6px 10px; background:rgba(28,59,52,.85); }
+  #zoom button.on { background:var(--accent); }
+  .side { display:flex; flex-direction:column; gap:12px; min-width:0; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:12px; }
+  .card h2 { margin:0 0 8px; color:var(--muted); font-weight:400; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { text-align:right; color:var(--muted); font-weight:400; padding:3px 4px; }
+  th:first-child, td:first-child { text-align:left; }
+  td { text-align:right; padding:5px 4px; border-top:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  td.now { color:var(--ink); font-weight:600; }
+  .sw { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:-1px; }
+  label.stage { cursor:pointer; white-space:nowrap; }
+  label.stage input { accent-color:var(--mint); margin:0 6px 0 0; vertical-align:-2px; }
+  .explain { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:7px; color:var(--muted); font-size:13px; }
+  .explain b { color:var(--ink); font-weight:500; }
+  #chart { width:100%; height:120px; display:block; cursor:pointer; }
+  .timebar { display:flex; align-items:center; gap:10px; }
+  input[type=range] { flex:1; accent-color:var(--accent); }
+  #drive { color:var(--muted); font-size:13px; }
+  @media (max-width:520px) {
+    table { font-size:11.5px; }
+    th, td { padding:4px 2px; }
+    label.stage { white-space:normal; }
+    .timebar { flex-wrap:wrap; }
+    .timebar input[type=range] { flex-basis:100%; order:3; }
+    #clock { min-width:0 !important; }
+  }
+</style>
+<script>
+  if (new URLSearchParams(location.search).has("embed")) document.documentElement.classList.add("embed");
+</script>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>From a fuzzy GPS fix to the right lane</h1>
+    <p>A car drives a real San Francisco street grid. Each classic technique is layered on in turn and scored against ground truth.</p>
+  </header>
+  <div class="bar">
+    <span class="mono" style="color:var(--muted)">GPS conditions</span>
+    <span class="seg" id="profiles"></span>
+    <button id="newdrive" class="primary">New drive</button>
+    <span class="spacer"></span>
+    <span id="status" class="mono"></span>
+  </div>
+  <div class="grid">
+    <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+      <div id="mapwrap">
+        <canvas id="map"></canvas>
+        <div id="zoom">
+          <button data-z="0.42">Area</button>
+          <button data-z="2.6">Street</button>
+          <button data-z="11">Lane</button>
+        </div>
+        <div id="maphint" class="mono">Drag to pan · scroll to zoom</div>
+      </div>
+      <div class="timebar">
+        <button id="play">Pause</button>
+        <select id="speed"><option value="1">1×</option><option value="4" selected>4×</option><option value="10">10×</option></select>
+        <input type="range" id="scrub" min="0" max="1000" value="0">
+        <span id="clock" class="mono" style="min-width:90px;text-align:right">0.0 s</span>
+      </div>
+      <div class="card" style="padding:10px 12px">
+        <h2 class="mono">Position error over time (m)</h2>
+        <canvas id="chart"></canvas>
+      </div>
+    </div>
+    <div class="side">
+      <div class="card">
+        <h2 class="mono">The stack, one layer at a time</h2>
+        <table>
+          <thead><tr><th>Stage</th><th>Now</th><th>RMS</th><th>Lateral</th><th>Road</th><th>Lane</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <ul class="explain">
+          <li><b>Kalman filter</b> fuses 1 Hz GPS with 10 Hz wheel speed and gyro, smoothing noise and coasting through the overpass, but it does not know where the roads are.</li>
+          <li><b>Map matching</b> runs a hidden Markov model over nearby road segments, keeps only driveable sequences, and snaps the car onto the road it picks.</li>
+          <li><b>SLAM landmark map</b>: a mapping fleet builds a map of poles and signs with graph SLAM. Localizing against it removes the GPS bias that map matching leaves along the street.</li>
+          <li><b>Lane map</b>: a lane camera's solid and dashed markings pick the lane, and its in-lane offset places the car within it.</li>
+        </ul>
+      </div>
+      <div class="card" id="drive">Loading the map…</div>
+    </div>
+  </div>
+</div>
+<script>
+const COLORS = { truth: "#EFF5F3", gps: "#F8947F", kalman: "#F3F662", map: "#81CEEA", slam: "#B29AF9", lane: "#BBD96D" };
+const $ = (id) => document.getElementById(id);
+const canvas = $("map"), ctx = canvas.getContext("2d");
+let MAP = null, RUN = null, profile = "urban-canyon";
+const visible = { gps: true, kalman: true, map: true, slam: true, lane: true };
+let view = { cx: 0, cy: 0, scale: 0.42 };
+let follow = true, playing = true, frame = 0, tSim = 0, lastTs = null;
+
+function resize() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  for (const c of [canvas, $("chart")]) { c.width = c.clientWidth * dpr; c.height = c.clientHeight * dpr; }
+  draw(); drawChart();
+}
+new ResizeObserver(resize).observe($("mapwrap"));
+
+const W = () => canvas.width, H = () => canvas.height;
+const dpr = () => canvas.width / canvas.clientWidth;
+function toScreen(x, y) { const s = view.scale * dpr(); return [W() / 2 + (x - view.cx) * s, H() / 2 - (y - view.cy) * s]; }
+function polyline(pts, n) {
+  ctx.beginPath();
+  for (let i = 0; i < (n ?? pts.length); i++) {
+    const p = pts[i]; if (!p) continue;
+    const [sx, sy] = toScreen(p[0], p[1]);
+    i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
+  }
+  ctx.stroke();
+}
+
+function draw() {
+  if (!MAP) return;
+  const s = view.scale * dpr();
+  ctx.fillStyle = "#173029"; ctx.fillRect(0, 0, W(), H());
+  // The I-80 overpass: GPS loses its fix or jumps in its shadow.
+  ctx.strokeStyle = "rgba(248,148,127,0.14)"; ctx.lineWidth = Math.max(4, 26 * s); ctx.lineCap = "round";
+  MAP.render.freeway.forEach((l) => polyline(l));
+  ctx.lineCap = "butt";
+  ctx.strokeStyle = "#3F7067"; ctx.lineWidth = Math.max(1, 0.15 * s);
+  MAP.render.edge.forEach((l) => polyline(l));
+  if (s > 1.2) {
+    ctx.setLineDash([3 * s, 6 * s]); ctx.strokeStyle = "#4B7D72"; ctx.lineWidth = Math.max(1, 0.12 * s);
+    MAP.render.divider.forEach((l) => polyline(l));
+    ctx.setLineDash([]); ctx.strokeStyle = "rgba(219,177,17,0.55)";
+    MAP.render.center.forEach((l) => polyline(l));
+  }
+  if (s > 1.0) {
+    ctx.fillStyle = "rgba(112,205,150,0.7)";
+    const r = Math.max(1.2, 0.35 * s);
+    MAP.landmark_map.xy.forEach(([x, y]) => { const [a, b] = toScreen(x, y); ctx.fillRect(a - r, b - r, 2 * r, 2 * r); });
+  }
+  if (!RUN) return;
+  const n = frame + 1;
+  // Ground truth: the whole route faintly, the driven part brighter.
+  ctx.strokeStyle = "rgba(239,245,243,0.18)"; ctx.lineWidth = Math.max(1.5, 0.5 * s); polyline(RUN.truth);
+  ctx.strokeStyle = "rgba(239,245,243,0.9)"; ctx.lineWidth = Math.max(1.5, 0.35 * s); polyline(RUN.truth, n);
+  for (const key of ["kalman", "map", "slam", "lane"]) {
+    if (!visible[key]) continue;
+    ctx.strokeStyle = COLORS[key]; ctx.globalAlpha = 0.85; ctx.lineWidth = Math.max(1.2, 0.25 * s);
+    polyline(RUN.tracks[key], n);
+  }
+  ctx.globalAlpha = 1;
+  // GPS fixes so far; older ones fade.
+  if (visible.gps) {
+    const tNow = frame * RUN.dt;
+    RUN.gps.forEach((p, k) => {
+      const age = tNow - RUN.gps_t[k];
+      if (!p || age < 0) return;
+      ctx.fillStyle = COLORS.gps; ctx.globalAlpha = Math.max(0.12, 1 - age / 40);
+      const [a, b] = toScreen(p[0], p[1]); ctx.beginPath(); ctx.arc(a, b, Math.max(2.5, 0.6 * s), 0, 7); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+  }
+  const t = RUN.truth[frame];
+  if (!t) return;
+  // SLAM: rays to the mapped landmarks the car detects right now.
+  const obs = RUN.observations[String(frame)] || RUN.observations[String(frame - 1)] || [];
+  if (visible.slam && obs.length) {
+    const sp = RUN.tracks.slam[frame];
+    ctx.strokeStyle = "rgba(178,154,249,0.55)"; ctx.lineWidth = Math.max(1, 0.08 * s);
+    obs.forEach((lid) => {
+      const j = MAP.lmIndex.get(lid); if (j === undefined) return;
+      const [x, y] = MAP.landmark_map.xy[j];
+      const [a, b] = toScreen(sp[0], sp[1]), [c, d] = toScreen(x, y);
+      ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(c, d); ctx.stroke();
+    });
+  }
+  // Kalman 1-sigma ellipse at the latest fix.
+  if (visible.kalman) {
+    const k = Math.min(Math.floor(frame * RUN.dt), RUN.kalman_ellipse.length - 1);
+    const [a, b, ang] = RUN.kalman_ellipse[k], kp = RUN.tracks.kalman[frame];
+    const [sx, sy] = toScreen(kp[0], kp[1]);
+    ctx.strokeStyle = "rgba(243,246,98,0.55)"; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.ellipse(sx, sy, Math.max(2, a * s), Math.max(2, b * s), -ang, 0, 7); ctx.stroke();
+  }
+  // Deltas: from the true car to each estimate.
+  const [tx, ty] = toScreen(t[0], t[1]);
+  const markers = [];
+  if (visible.gps) {
+    const k = Math.floor(frame * RUN.dt);
+    if (RUN.gps[k]) markers.push(["gps", RUN.gps[k]]);
+  }
+  for (const key of ["kalman", "map", "slam", "lane"]) if (visible[key]) markers.push([key, RUN.tracks[key][frame]]);
+  ctx.setLineDash([4, 4]); ctx.lineWidth = 1.2;
+  for (const [key, p] of markers) {
+    const [a, b] = toScreen(p[0], p[1]);
+    ctx.strokeStyle = COLORS[key]; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(a, b); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  for (const [key, p] of markers) {
+    const [a, b] = toScreen(p[0], p[1]);
+    ctx.fillStyle = COLORS[key]; ctx.beginPath(); ctx.arc(a, b, Math.max(4, 0.7 * s), 0, 7); ctx.fill();
+    ctx.strokeStyle = "#173029"; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+  // The true car, drawn to scale (4.6 m x 1.9 m) once zoomed in.
+  const nx = RUN.truth[Math.min(frame + 1, RUN.truth.length - 1)], px = RUN.truth[Math.max(frame - 1, 0)];
+  const heading = Math.atan2(nx[1] - px[1], nx[0] - px[0]);
+  ctx.save(); ctx.translate(tx, ty); ctx.rotate(-heading);
+  const L = Math.max(10, 4.6 * s), Wd = Math.max(5, 1.9 * s);
+  ctx.fillStyle = COLORS.truth; ctx.strokeStyle = "#173029"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.rect(-L / 2, -Wd / 2, L, Wd); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "#173029"; ctx.fillRect(L / 2 - L * 0.22, -Wd / 2 + 1, 2, Wd - 2);
+  ctx.restore();
+}
+
+const chart = $("chart"), cctx = chart.getContext("2d");
+function drawChart() {
+  const w = chart.width, h = chart.height;
+  cctx.clearRect(0, 0, w, h);
+  if (!RUN) return;
+  const n = RUN.truth.length, maxE = 25;
+  cctx.strokeStyle = "#32645B"; cctx.lineWidth = 1;
+  [5, 10, 20].forEach((e) => { const y = h - (e / maxE) * h; cctx.beginPath(); cctx.moveTo(0, y); cctx.lineTo(w, y); cctx.stroke(); });
+  cctx.fillStyle = "#7BA392"; cctx.font = `${10 * (w / chart.clientWidth)}px ui-monospace,monospace`;
+  [5, 10, 20].forEach((e) => cctx.fillText(`${e} m`, 4, h - (e / maxE) * h - 3));
+  for (const key of ["gps", "kalman", "map", "slam", "lane"]) {
+    if (!visible[key]) continue;
+    const errs = RUN.errors[key];
+    cctx.strokeStyle = COLORS[key]; cctx.lineWidth = key === "gps" ? 1 : 1.6; cctx.globalAlpha = key === "gps" ? 0.6 : 0.95;
+    cctx.beginPath(); let started = false;
+    errs.forEach((e, i) => {
+      if (e === null) { started = false; return; }
+      const x = (i / (n - 1)) * w, y = h - Math.min(e, maxE) / maxE * h;
+      started ? cctx.lineTo(x, y) : cctx.moveTo(x, y); started = true;
+    });
+    cctx.stroke();
+  }
+  cctx.globalAlpha = 1;
+  const x = (frame / (n - 1)) * w;
+  cctx.strokeStyle = "#EFF5F3"; cctx.lineWidth = 1.5; cctx.beginPath(); cctx.moveTo(x, 0); cctx.lineTo(x, h); cctx.stroke();
+}
+chart.addEventListener("click", (e) => { if (!RUN) return; seek(Math.round((e.offsetX / chart.clientWidth) * (RUN.truth.length - 1))); });
+
+function fmt(v) { return v === null || v === undefined ? "–" : v.toFixed(1); }
+function updateTable() {
+  if (!RUN) return;
+  $("rows").replaceChildren(...RUN.stages.map(({ key, label }) => {
+    const tr = document.createElement("tr"), s = RUN.scores[key];
+    const td0 = document.createElement("td"), lab = document.createElement("label");
+    lab.className = "stage";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = visible[key];
+    cb.onchange = () => { visible[key] = cb.checked; draw(); drawChart(); };
+    const sw = document.createElement("span"); sw.className = "sw"; sw.style.background = COLORS[key];
+    lab.append(cb, sw, label); td0.append(lab);
+    const now = RUN.errors[key][frame];
+    const cells = [fmt(now), fmt(s.rms_m), fmt(s.lateral_rms_m), `${s.on_road_pct.toFixed(0)}%`, `${s.in_lane_pct.toFixed(0)}%`];
+    tr.append(td0, ...cells.map((c, i) => { const td = document.createElement("td"); td.textContent = c; if (i === 0) td.className = "now"; return td; }));
+    return tr;
+  }));
+}
+
+function seek(f) {
+  frame = Math.max(0, Math.min(f, RUN.truth.length - 1)); tSim = frame * RUN.dt;
+  $("scrub").value = String(Math.round((frame / (RUN.truth.length - 1)) * 1000));
+  render();
+}
+function render() {
+  if (RUN && follow) { const t = RUN.truth[frame]; view.cx = t[0]; view.cy = t[1]; }
+  $("clock").textContent = RUN ? `${(frame * RUN.dt).toFixed(1)} / ${RUN.duration_s.toFixed(0)} s` : "";
+  draw(); drawChart(); updateTable();
+}
+function tick(ts) {
+  if (RUN && playing) {
+    if (lastTs !== null) tSim += ((ts - lastTs) / 1000) * Number($("speed").value);
+    const f = Math.floor(tSim / RUN.dt);
+    if (f >= RUN.truth.length - 1) { playing = false; $("play").textContent = "Replay"; frame = RUN.truth.length - 1; }
+    else frame = f;
+    $("scrub").value = String(Math.round((frame / (RUN.truth.length - 1)) * 1000));
+    render();
+  }
+  lastTs = ts;
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+$("scrub").oninput = (e) => { if (RUN) { playing = false; $("play").textContent = "Play"; seek(Math.round((e.target.value / 1000) * (RUN.truth.length - 1))); } };
+$("play").onclick = () => {
+  if (!RUN) return;
+  if (frame >= RUN.truth.length - 1) { frame = 0; tSim = 0; }
+  playing = !playing; $("play").textContent = playing ? "Pause" : "Play";
+};
+
+// Zoom presets, wheel zoom, and drag to pan (which turns off follow-the-car).
+document.querySelectorAll("#zoom button").forEach((b) => b.onclick = () => {
+  view.scale = Number(b.dataset.z); follow = b.dataset.z !== "0.42";
+  if (!follow && MAP) { const [x0, y0, x1, y1] = MAP.bounds; view.cx = (x0 + x1) / 2; view.cy = (y0 + y1) / 2; }
+  markZoom(); render();
+});
+function markZoom() { document.querySelectorAll("#zoom button").forEach((b) => b.classList.toggle("on", Math.abs(Number(b.dataset.z) - view.scale) < 1e-6)); }
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  view.scale = Math.min(40, Math.max(0.2, view.scale * Math.exp(-e.deltaY * 0.0015)));
+  markZoom(); draw();
+}, { passive: false });
+let drag = null;
+canvas.addEventListener("pointerdown", (e) => { drag = [e.clientX, e.clientY, view.cx, view.cy]; canvas.setPointerCapture(e.pointerId); canvas.style.cursor = "grabbing"; });
+canvas.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  follow = false;
+  view.cx = drag[2] - (e.clientX - drag[0]) / view.scale; view.cy = drag[3] + (e.clientY - drag[1]) / view.scale; draw();
+});
+canvas.addEventListener("pointerup", () => { drag = null; canvas.style.cursor = "grab"; });
+
+async function newDrive() {
+  $("newdrive").disabled = true;
+  $("status").textContent = "Driving…";
+  try {
+    const res = await fetch("api/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ profile }) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    RUN = await res.json();
+    frame = 0; tSim = 0; playing = true; $("play").textContent = "Pause";
+    follow = true; view.scale = 2.6; markZoom();
+    const ms = Object.values(RUN.timings_ms).reduce((a, b) => a + b, 0);
+    $("status").textContent = `Estimated in ${ms.toFixed(0)} ms`;
+    $("drive").textContent = "";
+    $("drive").append(`${RUN.route_names.join(" → ")}. ${(RUN.route_m / 1000).toFixed(1)} km in ${RUN.duration_s.toFixed(0)} s, ${RUN.profile.replace("-", " ")} GPS. ` +
+      `The landmark map was built by a fleet of ${MAP.fleet_drives} earlier drives. Drive seed ${RUN.seed}.`);
+    render();
+  } catch (err) {
+    $("status").textContent = "Run failed: " + err.message;
+  } finally {
+    $("newdrive").disabled = false;
+  }
+}
+$("newdrive").onclick = newDrive;
+
+(async function init() {
+  MAP = await (await fetch("api/map")).json();
+  MAP.lmIndex = new Map(MAP.landmark_map.ids.map((id, j) => [id, j]));
+  const [x0, y0, x1, y1] = MAP.bounds; view.cx = (x0 + x1) / 2; view.cy = (y0 + y1) / 2;
+  const labels = { "open-sky": "Open sky", "urban-canyon": "Urban canyon", "harsh": "Harsh" };
+  $("profiles").replaceChildren(...MAP.profiles.map((p) => {
+    const b = document.createElement("button"); b.textContent = labels[p] || p; b.classList.toggle("on", p === profile);
+    b.onclick = () => { profile = p; document.querySelectorAll("#profiles button").forEach((x) => x.classList.toggle("on", x === b)); newDrive(); };
+    return b;
+  }));
+  resize();
+  newDrive();
+})();
+
+// Embedded in another page: report our height so the parent can size the iframe to fit.
+if (document.documentElement.classList.contains("embed") && window.parent !== window) {
+  const report = () => window.parent.postMessage(
+    { type: "chalk-demo-height", height: Math.ceil(document.body.getBoundingClientRect().height) }, "*");
+  new ResizeObserver(report).observe(document.body);
+  report();
+}
+</script>
+</body>
+</html>
