@@ -9,31 +9,18 @@
 The server simulates a mapping fleet at startup and builds a landmark map with SLAM, then
 serves the viewer and a `POST /api/run` endpoint that drives a car and runs every stage.
 
-Credentials come from `chalk config` in the current directory (or the CHALK_* env vars):
+Credentials come from your existing `chalk login` (or the CHALK_* env vars):
     ./deploy.py [--env-id <environment>] [--name gps-lanes]
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import subprocess
 import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-
-
-def load_chalk_env(env_id: str | None) -> None:
-    if "CHALK_CLIENT_ID" not in os.environ:
-        cfg = json.loads(subprocess.check_output(["chalk", "config", "--json"]))
-        os.environ["CHALK_API_SERVER"] = cfg["apiServer"]["value"]
-        os.environ["CHALK_CLIENT_ID"] = cfg["clientId"]["value"]
-        os.environ["CHALK_CLIENT_SECRET"] = cfg["clientSecret"]["value"]
-        os.environ.setdefault("CHALK_ENVIRONMENT_ID", cfg["environment"]["value"])
-    if env_id:
-        os.environ["CHALK_ENVIRONMENT_ID"] = env_id
 
 
 def main() -> None:
@@ -43,7 +30,8 @@ def main() -> None:
     parser.add_argument("--fleet-drives", type=int, default=60)
     args = parser.parse_args()
 
-    load_chalk_env(args.env_id)
+    if args.env_id:
+        os.environ["CHALK_ENVIRONMENT"] = args.env_id
     from chalkcompute import Image, ReadinessProbe, ScalingGroup
 
     image = (
