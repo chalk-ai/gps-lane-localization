@@ -10,13 +10,11 @@ The server simulates a mapping fleet at startup and builds a landmark map with S
 serves the viewer and a `POST /api/run` endpoint that drives a car and runs every stage.
 
 Credentials come from your existing `chalk login` (or the CHALK_* env vars):
-    ./deploy.py [--env-id <environment>] [--name gps-lanes]
+    ./deploy.py
 """
 
 from __future__ import annotations
 
-import argparse
-import os
 import time
 from pathlib import Path
 
@@ -24,14 +22,6 @@ HERE = Path(__file__).resolve().parent
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--name", default="gps-lanes")
-    parser.add_argument("--env-id", default=None)
-    parser.add_argument("--fleet-drives", type=int, default=60)
-    args = parser.parse_args()
-
-    if args.env_id:
-        os.environ["CHALK_ENVIRONMENT"] = args.env_id
     from chalkcompute import Image, ReadinessProbe, ScalingGroup
 
     image = (
@@ -43,10 +33,10 @@ def main() -> None:
     )
     sg = ScalingGroup(
         image=image,
-        name=args.name,
+        name='gps-lanes',
         cpu="2",
         memory="4Gi",
-        env={"FLEET_DRIVES": str(args.fleet_drives)},
+        env={"FLEET_DRIVES": str(60)},
         entrypoint=["python", "/app/server.py"],
         port=8080,
         # /api/status answers only after the fleet's landmark map is built.

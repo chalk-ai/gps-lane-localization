@@ -44,7 +44,7 @@ map does.
 ## Run it
 
 ```bash
-./deploy.py                     # deploys to the environment in the SDK’s ambient credentials from `chalk login`
+./deploy.py # deploys to the environment in the SDK’s ambient credentials from `chalk login`
 ./evaluate.py --drives 20       # offline, no server
 ```
 
@@ -75,5 +75,5 @@ contributors, available under the Open Database License (see `app/data/README.md
 
 The SDK reads credentials, API host, and the selected environment from your existing
 `chalk login` in `~/.chalk.yml`, including project-scoped and default logins.
-For unattended runs, `CHALK_CLIENT_ID` and `CHALK_CLIENT_SECRET` remain supported. Where available, `--env-id`
-overrides the target environment; otherwise the SDK uses your login or environment settings.
+For unattended runs, `CHALK_CLIENT_ID` and `CHALK_CLIENT_SECRET` remain supported.
+The examples use the current environment selected by your Chalk login.
