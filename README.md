@@ -44,7 +44,7 @@ map does.
 ## Run it
 
 ```bash
-./deploy.py # deploys to the environment in the SDK’s ambient credentials from `chalk login`
+./deploy.py # deploys to the environment in your existing `chalk login`
 ./evaluate.py --drives 20       # offline, no server
 ```
 
